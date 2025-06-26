@@ -20,7 +20,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const pr = context.payload.pull_request;
-            const runName = "Archive index.html if it exists"; // Workflow name to wait for
+            const runName = "Archive index.html on PR"; // Workflow name to wait for
             const maxAttempts = 30;
             const waitMs = 10000;
 
