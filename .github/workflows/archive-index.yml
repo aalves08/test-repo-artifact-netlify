@@ -1,0 +1,27 @@
+name: Archive index.html on PR
+
+on:
+  pull_request:
+    types: [synchronize, opened]
+
+jobs:
+  archive-and-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Archive index.html if it exists
+        run: |
+          if [ -f index.html ]; then
+            zip index-archive.zip index.html
+          else
+            echo "index.html not found!" && exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: index-html-archive
+          path: index-archive.zip
