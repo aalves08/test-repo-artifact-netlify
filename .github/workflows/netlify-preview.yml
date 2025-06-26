@@ -1,0 +1,104 @@
+name: Deploy Netlify Preview from PR Artifact
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  wait-and-deploy:
+    name: Wait for artifact & deploy to Netlify
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Wait for PR workflow to complete
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const runName = "Archive index.html if it exists"; // Workflow name to wait for
+            const maxAttempts = 30;
+            const waitMs = 10000;
+
+            function sleep(ms) {
+              return new Promise(resolve => setTimeout(resolve, ms));
+            }
+
+            async function getLatestRun() {
+              const runs = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                event: "pull_request",
+                branch: pr.head.ref,
+              });
+
+              return runs.data.workflow_runs.find(run => run.name === runName && run.head_sha === pr.head.sha);
+            }
+
+            let run;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              run = await getLatestRun();
+              if (run && run.status === 'completed') break;
+              console.log(`Attempt ${attempt}: Waiting for workflow run...`);
+              await sleep(waitMs);
+            }
+
+            if (!run || run.status !== 'completed' || run.conclusion !== 'success') {
+              throw new Error("Required workflow run did not complete successfully.");
+            }
+
+            core.setOutput("run-id", run.id);
+
+      - name: Download artifact from PR workflow
+        uses: actions/download-artifact@v4
+        with:
+          name: index-html-archive
+          run-id: ${{ steps.wait-and-deploy.outputs.run-id }}
+
+      - name: Unzip artifact
+        run: unzip index-archive.zip -d site
+
+      - name: Deploy a11y report to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          DEPLOY_ALIAS="pr-${PR_NUMBER}"
+          npx netlify deploy \
+            --auth $NETLIFY_AUTH_TOKEN \
+            --site=$NETLIFY_SITE_ID \
+            --dir=cypress/accessibility \
+            --alias=$DEPLOY_ALIAS
+            
+      - name: Create GitHub Deployment and Status
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+            const envName = `ACCESSIBILITY-REPORT-PR-${prNumber}`;
+            const envUrl = `https://pr-${prNumber}--chipper-paletas-75dfc9.netlify.app`;
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: pr.head.sha,
+              required_contexts: [],
+              environment: envName,
+              auto_merge: false,
+              transient_environment: true
+            });
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: "success",
+              environment_url: envUrl,
+              log_url: envUrl
+            });
+
